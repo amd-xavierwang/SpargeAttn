@@ -58,18 +58,29 @@ The official implementation of [SpargeAttn](https://arxiv.org/abs/2502.18137), a
 - [2025-03] Support high acceleration on more GPUs, e.g., H100.
 
 ## Installation
+
 ### Base environment
 + `python>=3.9`   , `torch>=2.3.0`
 - `CUDA`:
   + `>=12.8` for Blackwell, `>=12.4` for fp8 support on Ada, `>=12.3` for fp8 support on Hopper, `>=12.0` for Ampere
+- `ROCm` (AMD GPUs):
+  + See [README_AMD_LINUX.md](README_AMD_LINUX.md) for Linux setup
+  + See [README_AMD_WINDOWS.md](README_AMD_WINDOWS.md) for Windows setup
 
-
-### Install Package
+### Install Package (NVIDIA)
 
 ```bash
 pip install ninja   # for parallel compilation
 python setup.py install   # or pip install -e .
 ```
+
+### Install Package (AMD ROCm)
+
+```bash
+pip install --no-build-isolation -v .
+```
+
+> **Note for AMD GPUs:** RDNA GPUs (gfx10xx/gfx11xx) do not support FP8, so use `spas_sage_attn_*` functions instead of `spas_sage2_attn_*`. See the AMD README files for details.
 
 
 ## Available API

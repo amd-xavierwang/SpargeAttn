@@ -3,7 +3,27 @@ import torch.nn.functional as F
 from typing import Optional
 from diffusers.models.attention_processor import Attention
 from diffusers.models import CogVideoXTransformer3DModel
-from spas_sage_attn import spas_sage2_attn_meansim_cuda, spas_sage2_attn_meansim_topk_cuda
+
+# Check for ROCm RDNA (gfx10xx/gfx11xx) which doesn't support FP8
+IS_ROCM = torch.version.hip is not None
+IS_RDNA = False
+if IS_ROCM and torch.cuda.is_available():
+    try:
+        arch = torch.cuda.get_device_properties(0).gcnArchName.split(':')[0]
+        IS_RDNA = arch.startswith('gfx10') or arch.startswith('gfx11')
+    except:
+        pass
+
+if IS_RDNA:
+    # Use FP16 variant for RDNA GPUs (no FP8 support)
+    from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage_attn_meansim_topk_cuda
+    sparge_meansim = spas_sage_attn_meansim_cuda
+    sparge_meansim_topk = spas_sage_attn_meansim_topk_cuda
+else:
+    # Use FP8 variant for MI series and NVIDIA GPUs
+    from spas_sage_attn import spas_sage2_attn_meansim_cuda, spas_sage2_attn_meansim_topk_cuda
+    sparge_meansim = spas_sage2_attn_meansim_cuda
+    sparge_meansim_topk = spas_sage2_attn_meansim_topk_cuda
 
 
 class SpargeCogVideoXAttnProcessor:
@@ -74,9 +94,9 @@ class SpargeCogVideoXAttnProcessor:
             k_hnd = key.contiguous()
             v_hnd = value.contiguous()
             if self.mode == "cdfthreshd":
-                hidden_states = spas_sage2_attn_meansim_cuda(q_hnd, k_hnd, v_hnd, simthreshd1=-0.1, cdfthreshd=self.value)
+                hidden_states = sparge_meansim(q_hnd, k_hnd, v_hnd, simthreshd1=-0.1, cdfthreshd=self.value)
             else:
-                hidden_states = spas_sage2_attn_meansim_topk_cuda(q_hnd, k_hnd, v_hnd, topk=self.value)
+                hidden_states = sparge_meansim_topk(q_hnd, k_hnd, v_hnd, topk=self.value)
         else:
             hidden_states = F.scaled_dot_product_attention(
                 query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False

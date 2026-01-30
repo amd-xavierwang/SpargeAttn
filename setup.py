@@ -35,37 +35,80 @@ SAGE2PP_ENABLED = True
 # Check for ROCm
 IS_ROCM = torch.version.hip is not None
 
-def clone_rocwmma():
-    """Clone rocWMMA v2 from rocm-libraries repo to third_party directory."""
+def get_rocwmma_include():
+    """Get rocWMMA include path, checking system paths first (for Linux containers)."""
+
+    # Check environment variable override first
+    env_rocwmma = os.environ.get("ROCWMMA_INCLUDE_PATH")
+    if env_rocwmma and os.path.exists(env_rocwmma):
+        print(f"Using rocWMMA from environment: {env_rocwmma}")
+        return env_rocwmma
+
+    # Check system ROCm installation (Linux containers typically have this)
+    rocm_home = os.environ.get("ROCM_HOME", "/opt/rocm")
+    system_rocwmma_paths = [
+        os.path.join(rocm_home, "include", "rocwmma"),  # Standard ROCm install
+        os.path.join(rocm_home, "include"),              # rocwmma.hpp directly in include
+        "/opt/rocm/include/rocwmma",                     # Fallback absolute path
+    ]
+
+    for path in system_rocwmma_paths:
+        rocwmma_hpp = os.path.join(path, "rocwmma.hpp") if not path.endswith("rocwmma") else os.path.join(path, "rocwmma.hpp")
+        # Check for rocwmma.hpp in the directory
+        if os.path.exists(path):
+            if os.path.isfile(os.path.join(path, "rocwmma.hpp")):
+                print(f"Found system rocWMMA at: {path}")
+                return path
+            # For paths ending in rocwmma, check parent
+            parent = os.path.dirname(path)
+            if os.path.isfile(os.path.join(parent, "rocwmma", "rocwmma.hpp")):
+                print(f"Found system rocWMMA at: {os.path.join(parent, 'rocwmma')}")
+                return os.path.join(parent, "rocwmma")
+
+    # Check if already cloned in third_party
     rocm_libs_dir = os.path.join(THIRD_PARTY_DIR, "rocm-libraries")
-    rocwmma_include = None
-    
-    if os.path.exists(rocm_libs_dir):
-        print(f"rocm-libraries already exists at {rocm_libs_dir}")
-        rocwmma_include = os.path.join(rocm_libs_dir, "projects", "rocwmma", "library", "include")
-    else:
-        print("Cloning rocWMMA v2 from rocm-libraries...")
-        os.makedirs(THIRD_PARTY_DIR, exist_ok=True)
-        
-        # Use sparse checkout to only get rocwmma
-        clone_cmds = [
-            f'git clone --filter=blob:none --sparse https://github.com/ROCm/rocm-libraries.git "{rocm_libs_dir}"',
-            f'cd "{rocm_libs_dir}" && git sparse-checkout set projects/rocwmma'
-        ]
-        
-        for cmd in clone_cmds:
-            ret = os.system(cmd)
-            if ret != 0:
-                print(f"Warning: Failed to execute: {cmd}")
-                return None
-        
-        rocwmma_include = os.path.join(rocm_libs_dir, "projects", "rocwmma", "library", "include")
-    
-    if rocwmma_include and os.path.exists(rocwmma_include):
+    rocwmma_include = os.path.join(rocm_libs_dir, "projects", "rocwmma", "library", "include")
+    if os.path.exists(rocwmma_include):
+        print(f"Using existing rocWMMA v2 at: {rocwmma_include}")
+        return rocwmma_include
+
+    # Try to clone rocWMMA v2 from rocm-libraries repo
+    print("Attempting to clone rocWMMA v2 from rocm-libraries...")
+    os.makedirs(THIRD_PARTY_DIR, exist_ok=True)
+
+    try:
+        # Check if git is available
+        result = subprocess.run(["git", "--version"], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Warning: git not available, cannot clone rocWMMA")
+            return None
+    except FileNotFoundError:
+        print("Warning: git not found, cannot clone rocWMMA")
+        return None
+
+    # Use sparse checkout to only get rocwmma
+    try:
+        subprocess.run(
+            ["git", "clone", "--filter=blob:none", "--sparse",
+             "https://github.com/ROCm/rocm-libraries.git", rocm_libs_dir],
+            check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ["git", "-C", rocm_libs_dir, "sparse-checkout", "set", "projects/rocwmma"],
+            check=True, capture_output=True, text=True
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to clone rocWMMA: {e}")
+        return None
+    except Exception as e:
+        print(f"Warning: Error cloning rocWMMA: {e}")
+        return None
+
+    if os.path.exists(rocwmma_include):
         print(f"rocWMMA v2 include path: {rocwmma_include}")
         return rocwmma_include
     else:
-        print("Warning: rocWMMA include path not found")
+        print("Warning: rocWMMA include path not found after clone")
         return None
 
 
@@ -118,8 +161,8 @@ if IS_ROCM:
     rocm_arch = get_rocm_arch()
     print(f"Detected ROCm architecture: {rocm_arch}")
     
-    # Clone rocWMMA v2
-    rocwmma_include = clone_rocwmma()
+    # Get rocWMMA include path (system install, env override, or clone)
+    rocwmma_include = get_rocwmma_include()
     
     # Compiler flags for ROCm
     debug = os.environ.get("SA_DEBUG", "0") == "1"
@@ -135,9 +178,8 @@ if IS_ROCM:
     elif rocm_arch.startswith("gfx10") or rocm_arch.startswith("gfx11"):
         rocm_hipcc.append("-DSA_ARCH_RDNA_SERIES=1")
     
-    # Windows-specific: avoid GPU RDC which causes linker issues
-    if sys.platform == "win32":
-        rocm_hipcc.append("-fno-gpu-rdc")
+    # Disable GPU RDC which can cause issues on ROCm (needed for both Windows and Linux)
+    rocm_hipcc.append("-fno-gpu-rdc")
     
     rocm_hipcc.append(f"-D__ROCM_ARCH_{rocm_arch.upper()}")
     
