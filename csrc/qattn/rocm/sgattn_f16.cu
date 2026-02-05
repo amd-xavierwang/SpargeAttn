@@ -95,16 +95,32 @@ struct SVFragmentTypes<hip_bfloat16> {
 };
 
 /*
- * RDNA3 WMMA element-to-matrix mapping helpers.
- * Based on AMD Matrix Instruction Calculator output.
+ * WMMA element-to-matrix mapping helpers.
+ *
+ * Different GPU architectures have different WMMA register layouts:
+ *
+ * gfx11 (RDNA3) layout:
+ *   - Each register holds 2 rows, interleaved across lanes
+ *   - row = reg * 2 + (lane_id >= 16 ? 1 : 0)
+ *   - col = lane_id % 16
+ *
+ * gfx12 (RDNA4) layout:
+ *   - Lanes 0-15 own rows 0-7, lanes 16-31 own rows 8-15
+ *   - row = reg + (lane_id >= 16 ? 8 : 0)
+ *   - col = lane_id % 16
  */
 __device__ __forceinline__ uint32_t wmma_elem_row(uint32_t reg, uint32_t lane_id) {
-    // reg ∈ [0,7], row = reg * 2 + (lane_id >= 16 ? 1 : 0)
+#if defined(SA_ARCH_RDNA4_SERIES) || defined(__gfx1200__) || defined(__gfx1201__)
+    // gfx12 (RDNA4): each lane owns 8 consecutive rows
+    return reg + (lane_id >> 4) * 8;
+#else
+    // gfx11 (RDNA3): interleaved row mapping
     return reg * 2 + (lane_id >> 4);
+#endif
 }
 
 __device__ __forceinline__ uint32_t wmma_elem_col(uint32_t lane_id) {
-    // col = lane_id % 16
+    // Column mapping is the same for both architectures
     return lane_id & 15;
 }
 

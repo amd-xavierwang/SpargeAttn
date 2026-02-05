@@ -4,23 +4,26 @@ from typing import Optional
 from diffusers.models.attention_processor import Attention
 from diffusers.models import CogVideoXTransformer3DModel
 
-# Check for ROCm RDNA (gfx10xx/gfx11xx) which doesn't support FP8
+# Detect ROCm and architecture
 IS_ROCM = torch.version.hip is not None
-IS_RDNA = False
+IS_RDNA3_NO_FP8 = False
+
 if IS_ROCM and torch.cuda.is_available():
     try:
         arch = torch.cuda.get_device_properties(0).gcnArchName.split(':')[0]
-        IS_RDNA = arch.startswith('gfx10') or arch.startswith('gfx11')
+        # RDNA3 (gfx10xx/gfx11xx) doesn't support FP8 WMMA
+        # RDNA4 (gfx12xx) and MI series (gfx9xx) support FP8
+        IS_RDNA3_NO_FP8 = arch.startswith('gfx10') or arch.startswith('gfx11')
     except:
         pass
 
-if IS_RDNA:
-    # Use FP16 variant for RDNA GPUs (no FP8 support)
+if IS_RDNA3_NO_FP8:
+    # Use FP16 variant for RDNA3 GPUs (no FP8 support)
     from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage_attn_meansim_topk_cuda
     sparge_meansim = spas_sage_attn_meansim_cuda
     sparge_meansim_topk = spas_sage_attn_meansim_topk_cuda
 else:
-    # Use FP8 variant for MI series and NVIDIA GPUs
+    # Use FP8 variant for RDNA4, MI series, and NVIDIA GPUs
     from spas_sage_attn import spas_sage2_attn_meansim_cuda, spas_sage2_attn_meansim_topk_cuda
     sparge_meansim = spas_sage2_attn_meansim_cuda
     sparge_meansim_topk = spas_sage2_attn_meansim_topk_cuda

@@ -175,6 +175,10 @@ if IS_ROCM:
     # Add architecture-specific defines for our kernel code
     if rocm_arch.startswith("gfx9"):
         rocm_hipcc.append("-DSA_ARCH_MI_SERIES=1")
+    elif rocm_arch.startswith("gfx12"):
+        # RDNA4 (gfx12xx) supports FP8 WMMA - treat similarly to MI series for FP8
+        rocm_hipcc.append("-DSA_ARCH_RDNA4_SERIES=1")
+        rocm_hipcc.append("-DSA_ARCH_FP8_CAPABLE=1")
     elif rocm_arch.startswith("gfx10") or rocm_arch.startswith("gfx11"):
         rocm_hipcc.append("-DSA_ARCH_RDNA_SERIES=1")
     
@@ -182,8 +186,16 @@ if IS_ROCM:
     rocm_hipcc.append("-fno-gpu-rdc")
     
     rocm_hipcc.append(f"-D__ROCM_ARCH_{rocm_arch.upper()}")
-    
+
+    # C++ compiler flags (need same architecture defines for pybind)
     rocm_cxx = base_flags + debug_flags
+    if rocm_arch.startswith("gfx9"):
+        rocm_cxx.append("-DSA_ARCH_MI_SERIES=1")
+    elif rocm_arch.startswith("gfx12"):
+        rocm_cxx.append("-DSA_ARCH_RDNA4_SERIES=1")
+        rocm_cxx.append("-DSA_ARCH_FP8_CAPABLE=1")
+    elif rocm_arch.startswith("gfx10") or rocm_arch.startswith("gfx11"):
+        rocm_cxx.append("-DSA_ARCH_RDNA_SERIES=1")
     
     include_dirs = []
     if rocwmma_include:
@@ -193,26 +205,47 @@ if IS_ROCM:
         print("Warning: Using system rocWMMA (may be older v1.x version)")
     
     is_mi_series = rocm_arch.startswith("gfx9")
-    
+    is_rdna4 = rocm_arch.startswith("gfx12")  # RDNA4 supports FP8 WMMA
+    is_fp8_capable = is_mi_series or is_rdna4
+
+    # Check if FP8 kernel source files exist
+    # MI series uses sgattn.cu, RDNA4 uses sgattn_f8.cu
+    fp8_kernels_mi = (
+        os.path.exists(os.path.join(THIS_DIR, "csrc/qattn/rocm/launch_sgattn.cu")) and
+        os.path.exists(os.path.join(THIS_DIR, "csrc/qattn/rocm/sgattn.cu"))
+    )
+    fp8_kernels_rdna4 = (
+        os.path.exists(os.path.join(THIS_DIR, "csrc/qattn/rocm/launch_sgattn_f8.cu")) and
+        os.path.exists(os.path.join(THIS_DIR, "csrc/qattn/rocm/sgattn_f8.cu"))
+    )
+
     ext_kwargs = {
         "extra_compile_args": {"cxx": rocm_cxx, "nvcc": rocm_hipcc},
     }
     if include_dirs:
         ext_kwargs["include_dirs"] = include_dirs
-    
+
     # Build qattn_rocm extension with FP16 kernels (all archs)
     qattn_sources = [
         "csrc/qattn/rocm/pybind_rocm.cpp",
         "csrc/qattn/rocm/sgattn_f16.cu",
         "csrc/qattn/rocm/launch_sgattn_f16.cu",
     ]
-    
-    if is_mi_series:
+
+    if is_rdna4 and fp8_kernels_rdna4:
+        qattn_sources.extend([
+            "csrc/qattn/rocm/launch_sgattn_f8.cu",
+            "csrc/qattn/rocm/sgattn_f8.cu"
+        ])
+        print(f"Building _qattn with FP8+FP16 for RDNA4 GPU ({rocm_arch})")
+    elif is_mi_series and fp8_kernels_mi:
         qattn_sources.extend([
             "csrc/qattn/rocm/launch_sgattn.cu",
             "csrc/qattn/rocm/sgattn.cu"
         ])
         print(f"Building _qattn with FP8+FP16 for MI-series GPU ({rocm_arch})")
+    elif is_fp8_capable:
+        print(f"Building _qattn with FP16 for {rocm_arch} (FP8 kernels not found)")
     else:
         print(f"Building _qattn with FP16 only for RDNA GPU ({rocm_arch})")
     

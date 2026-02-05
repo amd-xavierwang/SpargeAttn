@@ -29,14 +29,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         &qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_threshold,
         "QK int8 SV f16 block sparse attention with PV threshold (all ROCm GPUs)");
 
-#if defined(SA_ARCH_MI_SERIES)
-  // FP8 V matrix - MI series only
+#if defined(SA_ARCH_MI_SERIES) || defined(SA_ARCH_RDNA4_SERIES)
+  // FP8 V matrix - MI series and RDNA4 GPUs
   m.def("qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale",
         &qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale,
-        "QK int8 SV f8 block sparse attention (MI series GPUs)");
-  
+        "QK int8 SV f8 block sparse attention (MI series and RDNA4 GPUs)");
+
   m.def("qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold",
         &qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold,
-        "QK int8 SV f8 block sparse attention with PV threshold (MI series GPUs)");
+        "QK int8 SV f8 block sparse attention with PV threshold (MI series and RDNA4 GPUs)");
 #endif
 }

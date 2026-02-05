@@ -84,13 +84,13 @@ The setup.py automatically detects your GPU architecture. To override:
 
 ```bash
 # Force specific architecture
-ROCM_ARCH=gfx1100 pip install --no-build-isolation -v .
+ROCM_ARCH=gfx1100 pip install --no-build-isolation -e .
 
 # Debug build (unoptimized, with symbols)
-SA_DEBUG=1 pip install --no-build-isolation -v .
+SA_DEBUG=1 pip install --no-build-isolation -e .
 
 # Custom rocWMMA path (if not using system ROCm)
-ROCWMMA_INCLUDE_PATH=/path/to/rocwmma/include pip install --no-build-isolation -v .
+ROCWMMA_INCLUDE_PATH=/path/to/rocwmma/include pip install --no-build-isolation -e .
 ```
 
 ## Testing
@@ -145,17 +145,19 @@ Cosine similarity: 0.999900
 ### Running Inference Examples
 
 #### CogVideoX Example
+modify_model/modify_cogvideox.py has been modified to support RDNA GPUs. For other inference example files/your own model inference, please make the changes accordingly to replace the attention implementation.
 
 ```bash
 cd <path_to_spargeattn>
 
 # Generate a video with 10% sparsity (topk=0.1)
+# Higher topk -> higher quality -> slower inference
 python inference_examples/cogvideox_infer.py --mode topk --value 0.1 --start 0 --end 1
 ```
 
 ## API Usage
 
-### For RDNA GPUs (gfx10xx, gfx11xx) - Use FP16 functions
+### For RDNA<=3 GPUs (gfx10xx, gfx11xx) - Use FP16 functions
 
 ```python
 from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage_attn_meansim_topk_cuda
@@ -167,7 +169,7 @@ output = spas_sage_attn_meansim_cuda(q, k, v, cdfthreshd=0.9)
 output = spas_sage_attn_meansim_topk_cuda(q, k, v, topk=0.1)
 ```
 
-### For MI series GPUs (gfx90a, gfx942) - Use FP8 functions
+### For MI series GPUs (gfx90a, gfx942) and RDNA4+ GPUs (gfx12) - Use FP8 functions
 
 ```python
 from spas_sage_attn import spas_sage2_attn_meansim_cuda, spas_sage2_attn_meansim_topk_cuda
@@ -223,14 +225,6 @@ rocWMMA headers are needed. Either:
 2. Let setup.py auto-clone from GitHub
 3. Set custom path: `ROCWMMA_INCLUDE_PATH=/path/to/rocwmma pip install ...`
 
-### "undefined symbol" errors at runtime
-
-Rebuild with matching ROCm version:
-```bash
-pip uninstall spas_sage_attn
-pip install --no-build-isolation -v .
-```
-
 ### GPU memory errors during inference
 
 Try reducing batch size or sequence length. For very long sequences (>32K), ensure sufficient VRAM.
@@ -247,7 +241,7 @@ RUN pip install triton einops
 WORKDIR /workspace
 RUN git clone https://github.com/thu-ml/SpargeAttn.git
 WORKDIR /workspace/SpargeAttn
-RUN pip install --no-build-isolation -v .
+RUN pip install --no-build-isolation -e .
 ```
 
 Run with:

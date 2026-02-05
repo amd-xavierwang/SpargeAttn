@@ -4,7 +4,7 @@ from diffusers.utils import export_to_video
 import argparse
 from tqdm import tqdm
 from inference_examples.modify_model.modify_cogvideox import set_sparge_cogvideox
-
+import time
 
 prompt_path = "evaluate/datasets/video/prompts.txt"
 
@@ -40,8 +40,10 @@ if __name__ == "__main__":
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
 
+    total_time = 0.0
     for local_i, prompt in tqdm(enumerate(selected_prompts), total=len(selected_prompts)):
         global_i = args.start + local_i
+        start_time = time.perf_counter()
         video = pipe(
             prompt=prompt,
             num_videos_per_prompt=1,
@@ -50,8 +52,10 @@ if __name__ == "__main__":
             guidance_scale=6,
             generator=torch.Generator(device="cuda").manual_seed(42),
         ).frames[0]
-
+        total_time += time.perf_counter() - start_time
         export_to_video(video, f"{video_dir}/{global_i}.mp4", fps=8)
         del video
         gc.collect()
         torch.cuda.empty_cache()
+    
+    print(f"Avg inference time for CogVideoX ({args.mode}): {total_time / len(selected_prompts)} seconds.")

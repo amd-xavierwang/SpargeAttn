@@ -50,8 +50,8 @@ torch::Tensor qk_int8_sv_f16_accum_f16_block_sparse_attn_inst_buf_with_pv_thresh
     float sm_scale,
     int return_pv_count);
 
-#if defined(SA_ARCH_MI_SERIES)
-// FP8 V matrix - block sparse attention for MI-series GPUs
+#if defined(SA_ARCH_MI_SERIES) || defined(SA_ARCH_RDNA4_SERIES)
+// FP8 V matrix - block sparse attention for MI-series and RDNA4 GPUs
 void qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale(
     torch::Tensor query,
     torch::Tensor key,
@@ -67,7 +67,7 @@ void qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale(
     int qk_quant_gran,
     float sm_scale);
 
-// FP8 V matrix with PV threshold - block sparse attention for MI-series GPUs  
+// FP8 V matrix with PV threshold - block sparse attention for MI-series and RDNA4 GPUs
 torch::Tensor qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(
     torch::Tensor query,
     torch::Tensor key,

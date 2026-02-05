@@ -39,11 +39,13 @@ def get_gpu_arch_info():
     """
     if not torch.cuda.is_available():
         return None, False, False, False
-    
+
     props = torch.cuda.get_device_properties(0)
     if IS_ROCM:
         # ROCm: use gcnArchName
         arch = props.gcnArchName.split(':')[0] if hasattr(props, 'gcnArchName') else "gfx1100"
+        # RDNA3 (gfx10xx/gfx11xx) - no FP8 WMMA support
+        # RDNA4 (gfx12xx) - has FP8 WMMA support, treated separately
         is_rdna = arch.startswith("gfx10") or arch.startswith("gfx11")
         is_mi_series = arch.startswith("gfx9")
         return arch, True, is_rdna, is_mi_series
@@ -80,8 +82,10 @@ def is_sm90_or_equivalent(arch):
 def supports_fp8(arch):
     """Check if architecture supports FP8."""
     if IS_ROCM:
-        # Only MI series supports FP8 on ROCm
-        return arch.startswith("gfx9")
+        # RDNA4 (gfx12xx) supports FP8 WMMA (OCP FP8 types)
+        # MI series (gfx9xx) also supports FP8 (FNUZ types)
+        # RDNA3 (gfx10xx/gfx11xx) does NOT support FP8 WMMA
+        return arch.startswith("gfx12") or arch.startswith("gfx9")
     else:
         # CUDA: sm89+ supports FP8
         try:
@@ -89,6 +93,11 @@ def supports_fp8(arch):
             return sm_num >= 89
         except:
             return False
+
+
+def is_rdna4(arch):
+    """Check if architecture is RDNA4 (gfx12xx)."""
+    return IS_ROCM and arch.startswith("gfx12")
 
 @torch.compiler.disable
 def spas_sage2_attn_meansim_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True, simthreshd1=0.6, cdfthreshd=0.98, pvthreshd=50, attention_sink=False, tensor_layout="HND", output_dtype=torch.float16, return_sparsity=False):
@@ -108,6 +117,8 @@ def spas_sage2_attn_meansim_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_caus
     if smooth_k:
         km = k.mean(dim=-2, keepdim=True)
         # k = k - km
+    else:
+        km = None
     headdim = q.size(-1)
 
     arch = get_cuda_arch_versions()[q.device.index]
@@ -116,7 +127,7 @@ def spas_sage2_attn_meansim_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_caus
     if not supports_fp8(arch):
         raise RuntimeError(
             f"spas_sage2_attn_meansim_cuda requires FP8 support, but {arch} does not support FP8. "
-            f"On RDNA GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_cuda instead."
+            f"On RDNA3 GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_cuda instead."
         )
     
     # Choose block sizes based on architecture
@@ -152,11 +163,11 @@ def spas_sage2_attn_meansim_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_caus
         fused.scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, v_scale, kv_len, 2.25, 1)
 
         if arch == "sm90":
-            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold_sm90(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold_sm90(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
         elif SAGE2PP_ENABLED:
-            qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
         else:
-            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
 
     if tensor_layout == 'NHD':
         o = rearrange(o, '... H L D -> ... L H D')
@@ -187,15 +198,17 @@ def spas_sage2_attn_meansim_topk_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is
     if smooth_k:
         km = k.mean(dim=-2, keepdim=True)
         # k = k - km
+    else:
+        km = None
     headdim = q.size(-1)
 
     arch = get_cuda_arch_versions()[q.device.index]
-    
+
     # Check if this architecture supports FP8 (required for sage2)
     if not supports_fp8(arch):
         raise RuntimeError(
             f"spas_sage2_attn_meansim_topk_cuda requires FP8 support, but {arch} does not support FP8. "
-            f"On RDNA GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_topk_cuda instead."
+            f"On RDNA3 GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_topk_cuda instead."
         )
     
     if is_sm90_or_equivalent(arch):
@@ -229,11 +242,11 @@ def spas_sage2_attn_meansim_topk_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is
         fused.scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, v_scale, kv_len, 2.25, 1)
 
         if arch == "sm90":
-            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold_sm90(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold_sm90(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
         elif SAGE2PP_ENABLED:
-            qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
         else:
-            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, False, 1, scale, 0)
+            qattn.qk_int8_sv_f8_accum_f32_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold(q_int8, k_int8, v_fp8, o, lut, valid_block_num, pvthreshd, q_scale, k_scale, v_scale, 1, is_causal, 1, scale, 0)
 
     if tensor_layout == 'NHD':
         o = rearrange(o, '... H L D -> ... L H D')
@@ -264,6 +277,8 @@ def block_sparse_sage2_attn_cuda(q, k, v, mask_id=None, dropout_p=0.0, scale=Non
     if smooth_k:
         km = k.mean(dim=-2, keepdim=True)
         # k = k - km
+    else:
+        km = None
     headdim = q.size(-1)
     
     arch = get_cuda_arch_versions()[q.device.index]
@@ -272,7 +287,7 @@ def block_sparse_sage2_attn_cuda(q, k, v, mask_id=None, dropout_p=0.0, scale=Non
     if not supports_fp8(arch):
         raise RuntimeError(
             f"block_sparse_sage2_attn_cuda requires FP8 support, but {arch} does not support FP8. "
-            f"On RDNA GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_cuda instead."
+            f"On RDNA3 GPUs (gfx10xx/gfx11xx), use spas_sage_attn_meansim_cuda instead."
         )
     
     if is_sm90_or_equivalent(arch):
@@ -387,7 +402,7 @@ def spas_sage_attn_meansim_topk_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_
     assert tensor_layout in ['HND', 'NHD']
     if tensor_layout == 'NHD':
         q, k, v = map(lambda t: rearrange(t, '... L H D -> ... H L D'), (q, k, v))
-    
+
     headdim = q.size(-1)
     # min_seq depends on CTA_Q which depends on headdim for ROCm
     if IS_ROCM:
@@ -406,6 +421,8 @@ def spas_sage_attn_meansim_topk_cuda(q, k, v, attn_mask=None, dropout_p=0.0, is_
     if smooth_k:
         km = k.mean(dim=-2, keepdim=True)
         # k = k - km
+    else:
+        km = None
     headdim = q.size(-1)
 
     # For ROCm, use smaller tiles for headdim=128 to reduce register pressure:
