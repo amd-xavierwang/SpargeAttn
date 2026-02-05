@@ -72,13 +72,11 @@ export SA_DEBUG=0  # Set to 1 for debug builds
 ```bash
 cd <path_to_spargeattn>
 
-# Install with pip (recommended)
-pip install --no-build-isolation -v .
-
-# Alternative: Build extensions in place
-python setup.py build_ext --inplace
-pip install -e .
+# Install in editable mode (recommended)
+pip install --no-build-isolation -e .
 ```
+
+> **Note:** Editable mode (`-e`) is recommended when working from the source directory. This avoids Python path shadowing issues where the source directory without compiled extensions could take precedence over the installed package.
 
 #### Build Flags
 
